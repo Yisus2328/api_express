@@ -278,6 +278,123 @@ async function initializeApp() {
             }
         });
 
+
+        //Login admin
+        app.post('/login/admin', async (req, res) => {
+            const { id, email, contraseña } = req.body; 
+
+            if (!id || !email || !contraseña) {
+                return res.status(400).json({ success: false, message: 'ID, email y contraseña son requeridos.' });
+            }
+
+            
+            const tableName = 'administrador';
+            const idColumnName = 'id_admin'; 
+
+            try {
+                const query = `SELECT \`${idColumnName}\`, \`email\`, \`contraseña\` FROM \`${tableName}\` WHERE \`${idColumnName}\` = ? AND \`email\` = ?;`;
+
+                console.log(`Ejecutando consulta SQL para admin: ${query}`);
+                console.log(`Con parámetros: [${id}, ${email}]`);
+
+                const [results] = await dbPromise.query(query, [id, email]); 
+
+                if (results.length === 0) {
+                    return res.status(401).json({ success: false, message: 'Credenciales inválidas (ID o email no encontrado).' });
+                }
+
+                const admin = results[0];
+
+                
+                if (contraseña === admin.contraseña) {
+                    
+                    return res.status(200).json({
+                        success: true,
+                        message: `Bienvenido, Administrador ${id}!`,
+                        redirect_url: '/panel_ad/' 
+                    });
+                } else {
+                    return res.status(401).json({ success: false, message: 'Credenciales inválidas (contraseña incorrecta).' });
+                }
+
+            } catch (error) {
+                console.error('Error al procesar la solicitud de login de admin o al consultar la BD:', error);
+                return res.status(500).json({ success: false, message: 'Error interno del servidor. Por favor, intenta de nuevo más tarde.' });
+            }
+        });
+
+        //creacion empleados
+
+        app.post('/empleados/agregar', async (req, res) => {
+            
+            const { id, rut, nombre, email, contraseña, id_sucursal } = req.body;
+
+            if (!id || !rut || !nombre || !email || !contraseña || !id_sucursal) {
+                return res.status(400).json({ success: false, message: 'Faltan campos obligatorios para agregar el empleado, incluyendo el ID.' });
+            }
+
+            
+            let tipoEmpleado;
+            let tableName;
+            let idColumnName;
+            const idPrefix = id.substring(0, 2).toUpperCase(); 
+
+            switch (idPrefix) {
+                case 'CO':
+                    tipoEmpleado = 'contador';
+                    tableName = 'contador';
+                    idColumnName = 'id_contador';
+                    break;
+                case 'BO':
+                    tipoEmpleado = 'bodeguero';
+                    tableName = 'bodeguero';
+                    idColumnName = 'id_bodeguero';
+                    break;
+                case 'VE':
+                    tipoEmpleado = 'vendedor';
+                    tableName = 'vendedor';
+                    idColumnName = 'id_vendedor';
+                    break;
+                default:
+                    return res.status(400).json({ success: false, message: 'Prefijo de ID de empleado inválido. Debe ser CO, BO o VE.' });
+            }
+
+             try {
+                
+                const [existing] = await dbPromise.query(`SELECT \`${idColumnName}\` FROM \`${tableName}\` WHERE \`${idColumnName}\` = ?`, [id]);
+                if (existing.length > 0) {
+                    return res.status(409).json({ success: false, message: `Error: El ID '${id}' ya existe para un ${tipoEmpleado}.` });
+                }
+                
+                
+                const insertQuery = `INSERT INTO \`${tableName}\` (\`${idColumnName}\`, rut, nombre, email, contraseña, id_sucursal) VALUES (?, ?, ?, ?, ?, ?);`;
+                await dbPromise.query(insertQuery, [id, rut, nombre, email, contraseña, id_sucursal]);
+
+                res.status(201).json({
+                    success: true,
+                    message: `Empleado ${nombre} agregado exitosamente como ${tipoEmpleado}. ID: ${id}`,
+                    id_empleado_generado: id 
+                });
+
+        } catch (error) {
+            console.error('Error al agregar empleado:', error);
+
+            if (error.code === 'ER_DUP_ENTRY') {
+                let message = 'Error: Datos duplicados. Es posible que el RUT o Email ya estén registrados.';
+                if (error.message.includes('rut')) {
+                    message = 'Error: El RUT ya está registrado.';
+                } else if (error.message.includes('email')) {
+                    message = 'Error: El Email ya está registrado.';
+                }
+                return res.status(409).json({ success: false, message: message });
+            } else if (error.errno === 1452) { // <-- ¡Asegúrate de que este bloque exista!
+                return res.status(400).json({ success: false, message: 'Error de clave foránea: El ID de sucursal proporcionado no existe en la tabla de sucursales o no coincide.' });
+            }
+            res.status(500).json({ success: false, message: 'Error interno del servidor al agregar el empleado. Por favor, intenta de nuevo más tarde.' });
+        }
+        });
+
+
         
         app.listen(PORT, () => {
             console.log(`API Express corriendo en http://localhost:${PORT}`);
