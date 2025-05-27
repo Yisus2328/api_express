@@ -48,6 +48,7 @@ async function initializeApp() {
             res.send('API de Clientes');
         });
 
+        //APARTADO DE CLIENTES//
         //Agregar
         app.post('/clientes', (req, res) => {
             const { rut, nombre, email, contraseña, telefono, direccion } = req.body;
@@ -203,6 +204,7 @@ async function initializeApp() {
         });
 
 
+        //APARTADO DE TRABAJADORES//
         //Login trabajadores
         app.post('/login/trabajadores', async (req, res) => {
             const { id, email, contraseña } = req.body; // <-- Cambiado aquí para esperar email y contraseña
@@ -407,65 +409,117 @@ async function initializeApp() {
         });
 
 
+        //APARTADO DE PEDIDOS//
         // Endpoint para obtener pedidos con estado 'pagado'
+// Este endpoint reemplaza o complementa al anterior /pedidos/pagados
+        async function getPedidosByEstado(estado) {
+            if (!dbPromise) {
+                throw new Error('Conexión a la base de datos no establecida.');
+            }
+            const query = `
+                SELECT
+                    p.id_pedido,
+                    p.fecha,
+                    p.estado,
+                    p.tipo_entrega,
+                    p.direccion_entrega,
+                    p.id_bodeguero,
+                    p.rut,
+                    p.id_vendedor
+                FROM
+                    PEDIDO p
+                WHERE p.estado = ?
+                ORDER BY
+                    p.fecha DESC;
+            `;
+            const [rows] = await dbPromise.query(query, [estado]);
+            return rows;
+        }
+
+        // Endpoint para obtener pedidos con estado 'Pagado'
         app.get('/pedidos/pagados', async (req, res) => {
             try {
-                
-                const query = `
-                    SELECT
-                        p.id_pedido,
-                        p.fecha,
-                        p.estado,
-                        p.tipo_entrega,
-                        p.direccion_entrega,
-                        p.id_bodeguero,
-                        p.rut,
-                        p.id_vendedor,
-                        SUM(dp.precio_unitario) AS total_usd_detalle
-                    FROM
-                        pedido p
-                    JOIN
-                        detalle_pedido dp ON p.id_pedido = dp.id_pedido
-                    WHERE
-                        p.estado = 'Pagado'
-                    GROUP BY
-                        p.id_pedido, p.fecha, p.estado, p.tipo_entrega, p.direccion_entrega, p.id_bodeguero, p.rut, p.id_vendedor
-                    ORDER BY
-                        p.fecha DESC;
-                `;
-                const [rows] = await dbPromise.query(query);
-
+                const pedidos = await getPedidosByEstado('Pagado');
                 return res.status(200).json({
                     success: true,
-                    pedidos: rows,
+                    pedidos: pedidos,
                     message: 'Pedidos pagados obtenidos exitosamente.'
                 });
             } catch (error) {
                 console.error('Error al obtener pedidos pagados:', error);
-                return res.status(500).json({ success: false, message: 'Error interno del servidor al obtener pedidos.' });
+                return res.status(500).json({ success: false, message: 'Error interno del servidor al obtener pedidos pagados.', details: error.message });
             }
         });
 
-        // actualizar el estado del pedido a procesado"
-        app.put('/pedidos/:id/procesar', async (req, res) => {
-            const { id } = req.params;
-            const { estado } = req.body;
+        // Endpoint para obtener pedidos con estado 'En Preparacion'
+        app.get('/pedidos/en-preparacion', async (req, res) => {
+            try {
+                const pedidos = await getPedidosByEstado('En Preparacion');
+                return res.status(200).json({
+                    success: true,
+                    pedidos: pedidos,
+                    message: 'Pedidos en preparación obtenidos exitosamente.'
+                });
+            } catch (error) {
+                console.error('Error al obtener pedidos en preparación:', error);
+                return res.status(500).json({ success: false, message: 'Error interno del servidor al obtener pedidos en preparación.', details: error.message });
+            }
+        });
 
-            if (!id || estado !== 'procesado') {
-                return res.status(400).json({ success: false, message: 'ID de pedido o estado inválido para procesar.' });
+        // Endpoint para obtener pedidos con estado 'Preparado'
+        app.get('/pedidos/preparados', async (req, res) => {
+            try {
+                const pedidos = await getPedidosByEstado('Preparado');
+                return res.status(200).json({
+                    success: true,
+                    pedidos: pedidos,
+                    message: 'Pedidos preparados obtenidos exitosamente.'
+                });
+            } catch (error) {
+                console.error('Error al obtener pedidos preparados:', error);
+                return res.status(500).json({ success: false, message: 'Error interno del servidor al obtener pedidos preparados.', details: error.message });
+            }
+        });
+
+        // Endpoint para actualizar el estado del pedido por el bodeguero (este se mantiene igual)
+        app.put('/pedidos/:id/actualizar_estado_bodeguero', async (req, res) => {
+            const { id } = req.params;
+            const { nuevo_estado } = req.body;
+
+            if (!id || !nuevo_estado) {
+                return res.status(400).json({ success: false, message: 'ID de pedido o nuevo estado no proporcionado.' });
+            }
+
+            const estadosPermitidos = ['En Preparacion', 'Preparado'];
+            if (!estadosPermitidos.includes(nuevo_estado)) {
+                return res.status(400).json({ success: false, message: 'Estado no válido para la actualización del bodeguero. Estados permitidos: "En Preparacion", "Preparado".' });
             }
 
             try {
-                const [existingPedido] = await dbPromise.query('SELECT estado FROM pedido WHERE id_pedido = ?', [id]);
+                if (!dbPromise) {
+                    throw new Error('Conexión a la base de datos no establecida.');
+                }
+
+                const [existingPedido] = await dbPromise.query('SELECT estado FROM PEDIDO WHERE id_pedido = ?', [id]);
                 if (existingPedido.length === 0) {
                     return res.status(404).json({ success: false, message: 'Pedido no encontrado.' });
                 }
-                if (existingPedido[0].estado !== 'Pagado') {
-                    return res.status(400).json({ success: false, message: `El pedido ${id} no está en estado 'Pagado', sino '${existingPedido[0].estado}'. No se puede procesar.` });
+
+                const estadoActual = existingPedido[0].estado;
+
+                let isValidTransition = false;
+                if (estadoActual === 'Pagado' && nuevo_estado === 'En Preparacion') {
+                    isValidTransition = true;
+                } else if (estadoActual === 'En Preparacion' && nuevo_estado === 'Preparado') {
+                    isValidTransition = true;
                 }
 
-                const updateQuery = `UPDATE pedido SET estado = 'Procesado' WHERE id_pedido = ?`;
-                const [result] = await dbPromise.query(updateQuery, [id]);
+                if (!isValidTransition) {
+                    return res.status(400).json({ success: false, message: `Transición de estado inválida de '${estadoActual}' a '${nuevo_estado}'.` });
+                }
+
+                const updateQuery = `UPDATE PEDIDO SET estado = ? WHERE id_pedido = ?`;
+                const [result] = await dbPromise.query(updateQuery, [nuevo_estado, id]);
 
                 if (result.affectedRows === 0) {
                     return res.status(404).json({ success: false, message: 'Pedido no encontrado o no se pudo actualizar.' });
@@ -473,13 +527,15 @@ async function initializeApp() {
 
                 return res.status(200).json({
                     success: true,
-                    message: `Pedido ${id} actualizado a 'Procesado' exitosamente.`
+                    message: `Pedido ${id} actualizado a '${nuevo_estado}' exitosamente.`,
+                    nuevo_estado: nuevo_estado
                 });
             } catch (error) {
-                console.error('Error al procesar pedido:', error);
-                return res.status(500).json({ success: false, message: 'Error interno del servidor al procesar pedido.' });
+                console.error('Error al actualizar estado del pedido por bodeguero:', error);
+                return res.status(500).json({ success: false, message: 'Error interno del servidor al actualizar estado del pedido.', details: error.message });
             }
         });
+
 
 
         // Endpoint para obtener pedidos con estado 'Procesado' para el vendedor
@@ -596,6 +652,9 @@ async function initializeApp() {
                 return res.status(500).json({ success: false, message: 'Error interno del servidor al obtener pedidos enviados.' });
             }
         });
+
+
+
 
         
         app.listen(PORT, () => {
