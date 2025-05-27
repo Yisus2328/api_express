@@ -205,20 +205,25 @@ async function initializeApp() {
 
         //Login trabajadores
         app.post('/login/trabajadores', async (req, res) => {
-            const { id_trabajador, rut_trabajador } = req.body;
+            const { id, email, contraseña } = req.body; // <-- Cambiado aquí para esperar email y contraseña
 
-            if (!id_trabajador || !rut_trabajador) {
-                return res.status(400).json({ success: false, message: 'ID de trabajador y RUT son requeridos.' });
+            if (!id || !email || !contraseña) { // <-- Validación para los tres campos
+                return res.status(400).json({ success: false, message: 'ID de trabajador, email y contraseña son requeridos.' });
             }
 
-            const rutRegex = /^\d{1,2}\.\d{3}\.\d{3}-\w{1}$/;
-            if (!rutRegex.test(rut_trabajador)) {
-                return res.status(400).json({ success: false, message: 'Formato de RUT incorrecto. Debe ser como 12.345.678-9.' });
+            // Validación de formato de email en el backend también es buena práctica
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(email)) {
+                return res.status(400).json({ success: false, message: 'Formato de email incorrecto.' });
             }
 
             let tableName;
             let idColumnName;
-            let rolPrefix = id_trabajador.substring(0, 2).toUpperCase();
+            // Asume que las tablas de trabajadores tienen una columna 'email' y 'contraseña'
+            let emailColumnName = 'email'; 
+            let passwordColumnName = 'contraseña'; 
+
+            let rolPrefix = id.substring(0, 2).toUpperCase(); // Usa 'id' que viene del body
 
             switch (rolPrefix) {
                 case 'CO':
@@ -234,46 +239,53 @@ async function initializeApp() {
                     idColumnName = 'id_vendedor';
                     break;
                 default:
-                    return res.status(401).json({ success: false, message: 'ID de trabajador o RUT incorrecto.' });
+                    return res.status(401).json({ success: false, message: 'ID de trabajador incorrecto.' });
             }
 
             try {
-                const query = `SELECT \`${idColumnName}\`, \`rut\` FROM \`${tableName}\` WHERE \`${idColumnName}\` = ? AND \`rut\` = ?;`;
+                // Consulta para verificar ID, email Y contraseña
+                const query = `SELECT \`${idColumnName}\`, \`${emailColumnName}\`, \`${passwordColumnName}\` FROM \`${tableName}\` WHERE \`${idColumnName}\` = ? AND \`${emailColumnName}\` = ?;`;
 
-                console.log(`Ejecutando consulta SQL: ${query}`);
-                console.log(`Con parámetros: [${id_trabajador}, ${rut_trabajador}]`);
+                console.log(`Ejecutando consulta SQL para trabajador: ${query}`);
+                console.log(`Con parámetros: [${id}, ${email}]`);
 
-                
-                const [results] = await dbPromise.query(query, [id_trabajador, rut_trabajador]);
+                const [results] = await dbPromise.query(query, [id, email]);
                 const trabajadorEncontrado = results.length > 0 ? results[0] : null;
 
                 if (trabajadorEncontrado) {
-                    let redirectUrl = '/index/';
+                    // NOTA DE SEGURIDAD CRÍTICA: LAS CONTRASEÑAS DEBEN ESTAR HASHED EN LA BASE DE DATOS
+                    // Y VERIFICADAS CON UNA LIBRERÍA COMO 'bcrypt'.
+                    // ESTA ES UNA COMPARACIÓN DE TEXTO PLANO Y NO ES SEGURA PARA PRODUCCIÓN.
+                    if (contraseña === trabajadorEncontrado.contraseña) { // <-- Compara la contraseña
+                        let redirectUrl; // No inicializar con '/index/' aquí, se define por rol
 
-                    switch (rolPrefix) {
-                        case 'CO':
-                            redirectUrl = '/contadores/dashboard/';
-                            break;
-                        case 'BO':
-                            redirectUrl = '/bodegueros/inventario/';
-                            break;
-                        case 'VE':
-                            redirectUrl = '/vendedores/ventas/';
-                            break;
+                        switch (rolPrefix) {
+                            case 'CO':
+                                redirectUrl = '/contadores/dashboard/';
+                                break;
+                            case 'BO':
+                                redirectUrl = '/bodegueros/inventario/';
+                                break;
+                            case 'VE':
+                                redirectUrl = '/vendedores/ventas/';
+                                break;
+                            // Default no es necesario aquí porque ya se manejó arriba.
+                        }
+
+                        return res.status(200).json({
+                            success: true,
+                            message: `Bienvenido, ${id}!`,
+                            redirect_url: redirectUrl
+                        });
+                    } else {
+                        return res.status(401).json({ success: false, message: 'Credenciales inválidas (contraseña incorrecta).' });
                     }
-
-                    return res.status(200).json({
-                        success: true,
-                        message: `Bienvenido, ${id_trabajador}!`,
-                        redirect_url: redirectUrl
-                    });
-
                 } else {
-                    return res.status(401).json({ success: false, message: 'ID de trabajador o RUT incorrecto.' });
+                    return res.status(401).json({ success: false, message: 'Credenciales inválidas (ID o email no encontrado).' });
                 }
 
             } catch (error) {
-                console.error('Error al procesar la solicitud de login o al consultar la BD:', error);
+                console.error('Error al procesar la solicitud de login de trabajador o al consultar la BD:', error);
                 return res.status(500).json({ success: false, message: 'Error interno del servidor. Por favor, intenta de nuevo más tarde.' });
             }
         });
@@ -394,6 +406,196 @@ async function initializeApp() {
         }
         });
 
+
+        // Endpoint para obtener pedidos con estado 'pagado'
+        app.get('/pedidos/pagados', async (req, res) => {
+            try {
+                
+                const query = `
+                    SELECT
+                        p.id_pedido,
+                        p.fecha,
+                        p.estado,
+                        p.tipo_entrega,
+                        p.direccion_entrega,
+                        p.id_bodeguero,
+                        p.rut,
+                        p.id_vendedor,
+                        SUM(dp.precio_unitario) AS total_usd_detalle
+                    FROM
+                        pedido p
+                    JOIN
+                        detalle_pedido dp ON p.id_pedido = dp.id_pedido
+                    WHERE
+                        p.estado = 'Pagado'
+                    GROUP BY
+                        p.id_pedido, p.fecha, p.estado, p.tipo_entrega, p.direccion_entrega, p.id_bodeguero, p.rut, p.id_vendedor
+                    ORDER BY
+                        p.fecha DESC;
+                `;
+                const [rows] = await dbPromise.query(query);
+
+                return res.status(200).json({
+                    success: true,
+                    pedidos: rows,
+                    message: 'Pedidos pagados obtenidos exitosamente.'
+                });
+            } catch (error) {
+                console.error('Error al obtener pedidos pagados:', error);
+                return res.status(500).json({ success: false, message: 'Error interno del servidor al obtener pedidos.' });
+            }
+        });
+
+        // actualizar el estado del pedido a procesado"
+        app.put('/pedidos/:id/procesar', async (req, res) => {
+            const { id } = req.params;
+            const { estado } = req.body;
+
+            if (!id || estado !== 'procesado') {
+                return res.status(400).json({ success: false, message: 'ID de pedido o estado inválido para procesar.' });
+            }
+
+            try {
+                const [existingPedido] = await dbPromise.query('SELECT estado FROM pedido WHERE id_pedido = ?', [id]);
+                if (existingPedido.length === 0) {
+                    return res.status(404).json({ success: false, message: 'Pedido no encontrado.' });
+                }
+                if (existingPedido[0].estado !== 'Pagado') {
+                    return res.status(400).json({ success: false, message: `El pedido ${id} no está en estado 'Pagado', sino '${existingPedido[0].estado}'. No se puede procesar.` });
+                }
+
+                const updateQuery = `UPDATE pedido SET estado = 'Procesado' WHERE id_pedido = ?`;
+                const [result] = await dbPromise.query(updateQuery, [id]);
+
+                if (result.affectedRows === 0) {
+                    return res.status(404).json({ success: false, message: 'Pedido no encontrado o no se pudo actualizar.' });
+                }
+
+                return res.status(200).json({
+                    success: true,
+                    message: `Pedido ${id} actualizado a 'Procesado' exitosamente.`
+                });
+            } catch (error) {
+                console.error('Error al procesar pedido:', error);
+                return res.status(500).json({ success: false, message: 'Error interno del servidor al procesar pedido.' });
+            }
+        });
+
+
+        // Endpoint para obtener pedidos con estado 'Procesado' para el vendedor
+        app.get('/pedidos/procesados', async (req, res) => {
+            try {
+                const query = `
+                    SELECT
+                        p.id_pedido,
+                        p.fecha,
+                        p.estado,
+                        p.tipo_entrega,
+                        p.direccion_entrega,
+                        p.id_bodeguero,
+                        p.rut,
+                        p.id_vendedor,
+                        SUM(dp.precio_unitario) AS total_usd_detalle
+                    FROM
+                        pedido p
+                    JOIN
+                        detalle_pedido dp ON p.id_pedido = dp.id_pedido
+                    WHERE
+                        p.estado = 'Procesado'
+                    GROUP BY
+                        p.id_pedido, p.fecha, p.estado, p.tipo_entrega, p.direccion_entrega, p.id_bodeguero, p.rut, p.id_vendedor
+                    ORDER BY
+                        p.fecha DESC;
+                `;
+                const [rows] = await dbPromise.query(query);
+
+                return res.status(200).json({
+                    success: true,
+                    pedidos: rows,
+                    message: 'Pedidos procesados obtenidos exitosamente.'
+                });
+            } catch (error) {
+                console.error('Error al obtener pedidos procesados:', error);
+                return res.status(500).json({ success: false, message: 'Error interno del servidor al obtener pedidos procesados.' });
+            }
+        });
+
+        // Endpoint para actualizar el estado de un pedido de 'Procesado' a 'Enviado'
+        app.put('/pedidos/:id/enviar', async (req, res) => {
+            const { id } = req.params; 
+            const { estado } = req.body; 
+
+           
+            if (!id || estado !== 'enviado') { 
+                return res.status(400).json({ success: false, message: 'ID de pedido o estado inválido para enviar.' });
+            }
+
+            try {
+                
+                const [existingPedido] = await dbPromise.query('SELECT estado FROM pedido WHERE id_pedido = ?', [id]);
+                if (existingPedido.length === 0) {
+                    return res.status(404).json({ success: false, message: 'Pedido no encontrado.' });
+                }
+                
+                if (existingPedido[0].estado !== 'Procesado') {
+                    return res.status(400).json({ success: false, message: `El pedido ${id} no está en estado 'Procesado', sino '${existingPedido[0].estado}'. No se puede enviar.` });
+                }
+
+                
+                const updateQuery = `UPDATE pedido SET estado = 'Enviado' WHERE id_pedido = ?`;
+                const [result] = await dbPromise.query(updateQuery, [id]);
+
+                if (result.affectedRows === 0) {
+                    return res.status(404).json({ success: false, message: 'Pedido no encontrado o no se pudo actualizar.' });
+                }
+
+                return res.status(200).json({
+                    success: true,
+                    message: `Pedido ${id} actualizado a 'Enviado' exitosamente.`
+                });
+            } catch (error) {
+                console.error('Error al enviar pedido:', error);
+                return res.status(500).json({ success: false, message: 'Error interno del servidor al enviar pedido.' });
+            }
+        });
+
+        // Endpoint para obtener pedidos con estado 'Enviado'
+        app.get('/pedidos/enviados', async (req, res) => {
+            try {
+                const query = `
+                    SELECT
+                        p.id_pedido,
+                        p.fecha,
+                        p.estado,
+                        p.tipo_entrega,
+                        p.direccion_entrega,
+                        p.id_bodeguero,
+                        p.rut,
+                        p.id_vendedor,
+                        SUM(dp.precio_unitario) AS total_usd_detalle
+                    FROM
+                        pedido p
+                    JOIN
+                        detalle_pedido dp ON p.id_pedido = dp.id_pedido
+                    WHERE
+                        p.estado = 'Enviado'
+                    GROUP BY
+                        p.id_pedido, p.fecha, p.estado, p.tipo_entrega, p.direccion_entrega, p.id_bodeguero, p.rut, p.id_vendedor
+                    ORDER BY
+                        p.fecha DESC;
+                `;
+                const [rows] = await dbPromise.query(query);
+
+                return res.status(200).json({
+                    success: true,
+                    pedidos: rows,
+                    message: 'Pedidos enviados obtenidos exitosamente.'
+                });
+            } catch (error) {
+                console.error('Error al obtener pedidos enviados:', error);
+                return res.status(500).json({ success: false, message: 'Error interno del servidor al obtener pedidos enviados.' });
+            }
+        });
 
         
         app.listen(PORT, () => {
