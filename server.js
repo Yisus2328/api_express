@@ -204,79 +204,76 @@ async function initializeApp() {
         //APARTADO DE TRABAJADORES//
         //Login trabajadores
         app.post('/login/trabajadores', async (req, res) => {
-            const { id, email, contraseña } = req.body; // <-- Cambiado aquí para esperar email y contraseña
+            // 1. Ya no pedimos 'id' en el body de la petición
+            const { email, contraseña } = req.body; 
 
-            if (!id || !email || !contraseña) { // <-- Validación para los tres campos
-                return res.status(400).json({ success: false, message: 'ID de trabajador, email y contraseña son requeridos.' });
+            // 2. Validar que email y contraseña son requeridos
+            if (!email || !contraseña) {
+                return res.status(400).json({ success: false, message: 'Email y contraseña son requeridos.' });
             }
 
-            // Validación de formato de email en el backend también es buena práctica
+            // Validación de formato de email en el backend (buena práctica, la mantenemos)
             const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
             if (!emailRegex.test(email)) {
                 return res.status(400).json({ success: false, message: 'Formato de email incorrecto.' });
             }
 
-            let tableName;
-            let idColumnName;
-            // Asume que las tablas de trabajadores tienen una columna 'email' y 'contraseña'
-            let emailColumnName = 'email'; 
-            let passwordColumnName = 'contraseña'; 
+            // Definir las tablas de trabajadores a buscar
+            const workerTables = {
+                'contador': 'CO',
+                'bodeguero': 'BO',
+                'vendedor': 'VE'
+            };
 
-            let rolPrefix = id.substring(0, 2).toUpperCase(); 
-
-            switch (rolPrefix) {
-                case 'CO':
-                    tableName = 'contador';
-                    idColumnName = 'id_contador';
-                    break;
-                case 'BO':
-                    tableName = 'bodeguero';
-                    idColumnName = 'id_bodeguero';
-                    break;
-                case 'VE':
-                    tableName = 'vendedor';
-                    idColumnName = 'id_vendedor';
-                    break;
-                default:
-                    return res.status(401).json({ success: false, message: 'ID de trabajador incorrecto.' });
-            }
+            let trabajadorEncontrado = null;
+            let trabajadorRol = null;
+            let trabajadorId = null; // Para poder retornar el ID en la respuesta si es necesario
 
             try {
-                // Consulta para verificar ID, email Y contraseña
-                const query = `SELECT \`${idColumnName}\`, \`${emailColumnName}\`, \`${passwordColumnName}\` FROM \`${tableName}\` WHERE \`${idColumnName}\` = ? AND \`${emailColumnName}\` = ?;`;
+                // 3. Iterar sobre cada tabla de trabajadores para buscar por email y contraseña
+                for (const tableName in workerTables) {
+                    const query = `SELECT * FROM \`${tableName}\` WHERE \`email\` = ? AND \`contraseña\` = ?;`; // Asumiendo 'contraseña' es el nombre de la columna
 
-                console.log(`Ejecutando consulta SQL para trabajador: ${query}`);
-                console.log(`Con parámetros: [${id}, ${email}]`);
+                    console.log(`Intentando login en tabla: ${tableName} con email: ${email}`);
+                    
+                    const [results] = await dbPromise.query(query, [email, contraseña]); // Pasamos email y contraseña
 
-                const [results] = await dbPromise.query(query, [id, email]);
-                const trabajadorEncontrado = results.length > 0 ? results[0] : null;
+                    if (results.length > 0) {
+                        trabajadorEncontrado = results[0];
+                        trabajadorRol = workerTables[tableName]; // Obtenemos el prefijo del rol
+                        // Dependiendo de tu esquema, el ID se llamará 'id_contador', 'id_bodeguero', etc.
+                        // Accedemos a la clave que corresponde al ID de esa tabla específica
+                        trabajadorId = trabajadorEncontrado[`id_${tableName}`]; 
+                        break; // Encontramos al trabajador, salimos del bucle
+                    }
+                }
 
                 if (trabajadorEncontrado) {
-                    if (contraseña === trabajadorEncontrado.contraseña) { 
-                        let redirectUrl; 
+                    // Si llegamos aquí, significa que el email y la contraseña coincidieron en alguna tabla
+                    let redirectUrl; 
 
-                        switch (rolPrefix) {
-                            case 'CO':
-                                redirectUrl = '/contadores/dashboard/';
-                                break;
-                            case 'BO':
-                                redirectUrl = '/bodegueros/inventario/';
-                                break;
-                            case 'VE':
-                                redirectUrl = '/vendedores/ventas/';
-                                break;
-                        }
-
-                        return res.status(200).json({
-                            success: true,
-                            message: `Bienvenido, ${id}!`,
-                            redirect_url: redirectUrl
-                        });
-                    } else {
-                        return res.status(401).json({ success: false, message: 'Credenciales inválidas (contraseña incorrecta).' });
+                    switch (trabajadorRol) {
+                        case 'CO':
+                            redirectUrl = '/contadores/dashboard/';
+                            break;
+                        case 'BO':
+                            redirectUrl = '/bodegueros/inventario/';
+                            break;
+                        case 'VE':
+                            redirectUrl = '/vendedores/ventas/';
+                            break;
                     }
+
+                    return res.status(200).json({
+                        success: true,
+                        message: `Bienvenido, ${trabajadorEncontrado.nombre}!`, // Puedes usar el nombre del trabajador
+                        redirect_url: redirectUrl,
+                        user_id: trabajadorId, // Opcional: para que el frontend sepa el ID
+                        user_rol: trabajadorRol // Opcional: para que el frontend sepa el rol
+                    });
                 } else {
-                    return res.status(401).json({ success: false, message: 'Credenciales inválidas (ID o email no encontrado).' });
+                    // Si el bucle terminó y no se encontró el trabajador
+                    return res.status(401).json({ success: false, message: 'Credenciales inválidas (email o contraseña incorrectos).' });
                 }
 
             } catch (error) {
@@ -286,63 +283,68 @@ async function initializeApp() {
         });
 
 
+
         //Login admin
         app.post('/login/admin', async (req, res) => {
-            const { id, email, contraseña } = req.body;
+            // 1. Ya no esperamos 'id' en el body de la petición
+            const { email, contraseña } = req.body; 
 
-            // 1. Validación de campos de entrada
-            if (!id || !email || !contraseña) {
-                return res.status(400).json({ success: false, message: 'ID, email y contraseña son requeridos.' });
+            // 2. Validación de campos de entrada: solo email y contraseña
+            if (!email || !contraseña) {
+                return res.status(400).json({ success: false, message: 'Email y contraseña son requeridos.' });
+            }
+
+            // Opcional: Validación de formato de email en el backend
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(email)) {
+                return res.status(400).json({ success: false, message: 'Formato de email incorrecto.' });
             }
 
             const tableName = 'administrador';
-            const idColumnName = 'id_admin';
+            
 
             try {
-                // 2. Consulta SQL: Incluir el campo 'estado'
-                const query = `SELECT \`${idColumnName}\`, \`email\`, \`contraseña\`, \`estado\` FROM \`${tableName}\` WHERE \`${idColumnName}\` = ? AND \`email\` = ?;`;
+
+                const query = `SELECT id_admin, email, contraseña, estado FROM \`${tableName}\` WHERE \`email\` = ? AND \`contraseña\` = ?;`;
 
                 console.log(`Ejecutando consulta SQL para admin: ${query}`);
-                console.log(`Con parámetros: [${id}, ${email}]`);
+                console.log(`Con parámetros: [${email}, ${contraseña}]`); // Parámetros actualizados
 
-                const [results] = await dbPromise.query(query, [id, email]);
+       
+                const [results] = await dbPromise.query(query, [email, contraseña]);
 
-                // 3. Verificar si se encontró el administrador
+
                 if (results.length === 0) {
-                    return res.status(401).json({ success: false, message: 'Credenciales inválidas (ID o email no encontrado).' });
+                    // Mensaje más genérico para no dar pistas sobre qué credencial falló
+                    return res.status(401).json({ success: false, message: 'Credenciales inválidas (email o contraseña incorrectos).' });
                 }
 
                 const admin = results[0]; 
 
-                // 4. Comparación de contraseñas (para la prueba)
-                if (contraseña === admin.contraseña) {
-                    let responseMessage = `Bienvenido, Administrador ${id}!`;
-                    let redirectUrl = '/panel_ad'; // URL por defecto
 
-                    // 5. Lógica de validación del estado del administrador en el backend
-                    if (admin.estado === "No_verificado") {
-                        responseMessage = 'Favor, lo redirigiremos para cambiar su contraseña.';
-                        redirectUrl = '/admin_cambio';
-                    }
+                
+                let responseMessage = `Bienvenido, Administrador ${admin.id_admin}!`; // Usamos el ID encontrado
+                let redirectUrl = '/panel_ad'; // URL por defecto
 
-                    // 6. Login exitoso: Incluir el objeto 'admin' y la URL de redirección
-                    return res.status(200).json({
-                        success: true,
-                        message: responseMessage, // Mensaje dinámico
-                        admin: { 
-                            id_admin: admin.id_admin,
-                            email: admin.email,
-                            estado: admin.estado
-                        },
-                        redirect_url: redirectUrl // URL de redirección dinámica
-                    });
-                } else {
-                    // Contraseña incorrecta
-                    return res.status(401).json({ success: false, message: 'Credenciales inválidas (contraseña incorrecta).' });
+                // 6. Lógica de validación del estado del administrador en el backend
+                if (admin.estado === "No_verificado") {
+                    responseMessage = 'Bienvenido, lo redirigiremos para cambiar su contraseña.';
+                    redirectUrl = '/admin_cambio';
                 }
 
+                // 7. Login exitoso
+                return res.status(200).json({
+                    success: true,
+                    message: responseMessage,
+                    admin: { 
+                        id_admin: admin.id_admin,
+                        email: admin.email,
+                        estado: admin.estado
+                    },
+                    redirect_url: redirectUrl
+                });
+
             } catch (error) {
-                // Manejo de errores del servidor o de la base de datos
                 console.error('Error al procesar la solicitud de login de admin o al consultar la BD:', error);
                 return res.status(500).json({ success: false, message: 'Error interno del servidor. Por favor, intenta de nuevo más tarde.' });
             }
@@ -350,50 +352,52 @@ async function initializeApp() {
 
 
         app.post('/admin/cambiar-contrasena', async (req, res) => {
-            const { id, email, newPassword } = req.body;
+            // 1. Ahora esperamos 'email' en lugar de 'id'
+            const { email, newPassword } = req.body; 
 
-            // 1. Validación básica de entrada
-            if (!id || !email || !newPassword) {
-                return res.status(400).json({ success: false, message: 'ID, email y nueva contraseña son requeridos.' });
+            // 2. Validaciones básicas
+            if (!email || !newPassword) {
+                return res.status(400).json({ success: false, message: 'Email y nueva contraseña son requeridos.' });
             }
 
-            // 2. Validación de la nueva contraseña (puedes añadir más reglas aquí)
-            if (newPassword.length < 6) {
-                return res.status(400).json({ success: false, message: 'La nueva contraseña debe tener al menos 6 caracteres.' });
+            // Opcional: Validar formato del email
+            const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            if (!emailRegex.test(email)) {
+                return res.status(400).json({ success: false, message: 'Formato de email incorrecto.' });
             }
-            // Considera añadir reglas para mayúsculas, minúsculas, números, símbolos.
 
-            const tableName = 'administrador';
-            const idColumnName = 'id_admin';
+            // Opcional: Validar longitud de la nueva contraseña (si no se hace en frontend)
+            if (newPassword.length < 6) { 
+                return res.status(400).json({ success: false, message: 'La contraseña debe tener al menos 6 caracteres.' });
+            }
 
             try {
-                const checkQuery = `SELECT \`estado\` FROM \`${tableName}\` WHERE \`${idColumnName}\` = ? AND \`email\` = ?;`;
-                const [checkResults] = await dbPromise.query(checkQuery, [id, email]);
+                // 3. Buscar al administrador por email
+                const [adminResults] = await dbPromise.query('SELECT * FROM administrador WHERE email = ?;', [email]);
 
-                if (checkResults.length === 0) {
-                    return res.status(404).json({ success: false, message: 'Administrador no encontrado.' });
+                if (adminResults.length === 0) {
+                    return res.status(404).json({ success: false, message: 'Administrador no encontrado con ese email.' });
                 }
 
-                const currentAdminStatus = checkResults[0].estado;
+                const admin = adminResults[0];
 
-                if (currentAdminStatus !== "No verificado" && currentAdminStatus !== "No_verificado") {
-                    return res.status(403).json({ success: false, message: 'Su cuenta ya está verificada o no está en el estado correcto para cambiar la contraseña de esta forma.' });
-                }
-                
+                // 4. Actualizar la contraseña y el estado del administrador
                 const updateQuery = `
-                    UPDATE \`${tableName}\`
-                    SET \`contraseña\` = ?, \`estado\` = 'Verificado'
-                    WHERE \`${idColumnName}\` = ? AND \`email\` = ? AND (\`estado\` = 'No verificado' OR \`estado\` = 'No_verificado');
+                    UPDATE administrador
+                    SET contraseña = ?, estado = 'Verificado'
+                    WHERE id_admin = ?;
                 `;
+                // Usamos el id_admin real de la base de datos para el UPDATE
+                await dbPromise.query(updateQuery, [newPassword, admin.id_admin]); 
 
-                await dbPromise.query(updateQuery, [newPassword, id, email]); 
-
-
-                return res.status(200).json({ success: true, message: 'Contraseña actualizada y cuenta verificada exitosamente.' });
+                return res.status(200).json({
+                    success: true,
+                    message: 'Contraseña actualizada y cuenta verificada exitosamente.'
+                });
 
             } catch (error) {
-                console.error('Error al procesar la solicitud de cambio de contraseña:', error);
-                return res.status(500).json({ success: false, message: 'Error interno del servidor al cambiar la contraseña. Por favor, intenta de nuevo más tarde.' });
+                console.error('Error al cambiar la contraseña del administrador:', error);
+                return res.status(500).json({ success: false, message: 'Error interno del servidor al actualizar la contraseña.' });
             }
         });
 
