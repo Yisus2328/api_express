@@ -26,13 +26,10 @@ async function initializeApp() {
             database: 'ferremax'
         });
 
-        // Hacemos que la conexión base esté disponible
         db = connection;
 
-        // Y creamos una versión de la conexión que soporte promesas para el await
         dbPromise = connection.promise();
 
-        // Puedes usar el método .connect con un callback para ver si la conexión fue exitosa
         await new Promise((resolve, reject) => {
             connection.connect((err) => {
                 if (err) {
@@ -194,7 +191,7 @@ async function initializeApp() {
 
                 const user = results[0];
 
-                // Comparación de contraseñas en TEXTO PLANO (¡NO RECOMENDADO PARA PRODUCCIÓN!)
+
                 if (contraseña === user.contraseña) {
                     res.json({ message: 'Inicio de sesión exitoso.', rut: user.rut, nombre: user.nombre, email: user.email });
                 } else {
@@ -225,7 +222,7 @@ async function initializeApp() {
             let emailColumnName = 'email'; 
             let passwordColumnName = 'contraseña'; 
 
-            let rolPrefix = id.substring(0, 2).toUpperCase(); // Usa 'id' que viene del body
+            let rolPrefix = id.substring(0, 2).toUpperCase(); 
 
             switch (rolPrefix) {
                 case 'CO':
@@ -255,11 +252,8 @@ async function initializeApp() {
                 const trabajadorEncontrado = results.length > 0 ? results[0] : null;
 
                 if (trabajadorEncontrado) {
-                    // NOTA DE SEGURIDAD CRÍTICA: LAS CONTRASEÑAS DEBEN ESTAR HASHED EN LA BASE DE DATOS
-                    // Y VERIFICADAS CON UNA LIBRERÍA COMO 'bcrypt'.
-                    // ESTA ES UNA COMPARACIÓN DE TEXTO PLANO Y NO ES SEGURA PARA PRODUCCIÓN.
-                    if (contraseña === trabajadorEncontrado.contraseña) { // <-- Compara la contraseña
-                        let redirectUrl; // No inicializar con '/index/' aquí, se define por rol
+                    if (contraseña === trabajadorEncontrado.contraseña) { 
+                        let redirectUrl; 
 
                         switch (rolPrefix) {
                             case 'CO':
@@ -271,7 +265,6 @@ async function initializeApp() {
                             case 'VE':
                                 redirectUrl = '/vendedores/ventas/';
                                 break;
-                            // Default no es necesario aquí porque ya se manejó arriba.
                         }
 
                         return res.status(200).json({
@@ -319,16 +312,14 @@ async function initializeApp() {
                     return res.status(401).json({ success: false, message: 'Credenciales inválidas (ID o email no encontrado).' });
                 }
 
-                const admin = results[0]; // Obtiene el primer (y único) resultado
+                const admin = results[0]; 
 
                 // 4. Comparación de contraseñas (para la prueba)
-                // ¡ADVERTENCIA DE SEGURIDAD! Recuerda implementar hashing de contraseñas en producción.
                 if (contraseña === admin.contraseña) {
                     let responseMessage = `Bienvenido, Administrador ${id}!`;
                     let redirectUrl = '/panel_ad'; // URL por defecto
 
                     // 5. Lógica de validación del estado del administrador en el backend
-                    // Asegúrate de que el valor 'No verificado' coincida exactamente con tu DB
                     if (admin.estado === "No_verificado") {
                         responseMessage = 'Favor, lo redirigiremos para cambiar su contraseña.';
                         redirectUrl = '/admin_cambio';
@@ -338,7 +329,7 @@ async function initializeApp() {
                     return res.status(200).json({
                         success: true,
                         message: responseMessage, // Mensaje dinámico
-                        admin: { // Enviamos un objeto 'admin' con los datos relevantes (sin contraseña)
+                        admin: { 
                             id_admin: admin.id_admin,
                             email: admin.email,
                             estado: admin.estado
@@ -376,8 +367,6 @@ async function initializeApp() {
             const idColumnName = 'id_admin';
 
             try {
-                // Opcional pero recomendado: Verificar que el admin existe y su estado es 'No verificado'
-                // Esto previene que un admin ya verificado o un admin inexistente use este endpoint
                 const checkQuery = `SELECT \`estado\` FROM \`${tableName}\` WHERE \`${idColumnName}\` = ? AND \`email\` = ?;`;
                 const [checkResults] = await dbPromise.query(checkQuery, [id, email]);
 
@@ -387,29 +376,17 @@ async function initializeApp() {
 
                 const currentAdminStatus = checkResults[0].estado;
 
-                if (currentAdminStatus !== "No verificado" && currentAdminStatus !== "No_verificado") { // Asegúrate de que coincida con lo que guardas
-                    // Si el estado ya está verificado, o es un estado inesperado
+                if (currentAdminStatus !== "No verificado" && currentAdminStatus !== "No_verificado") {
                     return res.status(403).json({ success: false, message: 'Su cuenta ya está verificada o no está en el estado correcto para cambiar la contraseña de esta forma.' });
                 }
                 
-                // ¡IMPORTANTE! Aquí deberías hashear la `newPassword` antes de guardarla.
-                // const hashedPassword = await bcrypt.hash(newPassword, 10); // Ejemplo con bcrypt
-
-                // 3. Actualizar la contraseña y el estado en la base de datos
-                // La consulta actualiza tanto la contraseña como el estado a 'Verificado'
                 const updateQuery = `
                     UPDATE \`${tableName}\`
                     SET \`contraseña\` = ?, \`estado\` = 'Verificado'
                     WHERE \`${idColumnName}\` = ? AND \`email\` = ? AND (\`estado\` = 'No verificado' OR \`estado\` = 'No_verificado');
                 `;
 
-                await dbPromise.query(updateQuery, [newPassword, id, email]); // Reemplazar newPassword por hashedPassword en producción
-
-                // Verificar si se afectó alguna fila (lo que indica que se encontró y actualizó el admin)
-                // const [updateResult] = await dbPromise.query(updateQuery, [newPassword, id, email]);
-                // if (updateResult.affectedRows === 0) {
-                //     return res.status(404).json({ success: false, message: 'No se pudo actualizar la contraseña (admin no encontrado o estado no coincide).' });
-                // }
+                await dbPromise.query(updateQuery, [newPassword, id, email]); 
 
 
                 return res.status(200).json({ success: true, message: 'Contraseña actualizada y cuenta verificada exitosamente.' });
